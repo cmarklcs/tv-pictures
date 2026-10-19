@@ -28,7 +28,9 @@
     background: #000 center center no-repeat; -webkit-background-size: contain;
     background-size: contain; }
   #caption { position: absolute; left: 0; right: 0; bottom: 0; padding: 1vw 2vw;
-    font-size: 1.4vw; color: #ddd; background: rgba(0,0,0,0.55); }
+    font-size: 1.4vw; color: #ddd; background: rgba(0,0,0,0.55);
+    -webkit-transition: opacity 0.8s; transition: opacity 0.8s; }
+  #caption.faded { opacity: 0; }
 </style>
 </head>
 <body>
@@ -46,6 +48,7 @@ var pics = [];
 var current = 0;
 var viewing = false;
 var tiles = [];
+var captionTimer = null;
 
 var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13,
   BACK: [8, 27, 461, 10009] }; // Backspace, Esc, LG Back, Samsung Back
@@ -121,15 +124,53 @@ function show(i) {
   $('caption').innerHTML = '';
   $('caption').appendChild(document.createTextNode(
     pics[current] + '   (' + (current + 1) + ' of ' + pics.length + ')'));
+  $('caption').className = '';
+  clearTimeout(captionTimer);
+  captionTimer = setTimeout(function () { $('caption').className = 'faded'; }, 2500);
   $('viewer').style.display = 'block';
+  if (!viewing) enterFullscreen();
   viewing = true;
 }
 
 function hide() {
   $('viewer').style.display = 'none';
   viewing = false;
+  exitFullscreen();
   focusTile(current);
 }
+
+// Hide the TV browser's address bar/toolbar while a picture is showing.
+// Each browser spells these differently, and some old ones have none — then we just fill the page.
+function fullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement ||
+    document.webkitCurrentFullScreenElement || null;
+}
+
+function enterFullscreen() {
+  var el = document.documentElement;
+  var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen;
+  if (!fn || fullscreenElement()) return;
+  try {
+    var result = fn.call(el);
+    if (result && result['catch']) result['catch'](function () {});
+  } catch (e) {}
+}
+
+function exitFullscreen() {
+  var fn = document.exitFullscreen || document.webkitExitFullscreen || document.webkitCancelFullScreen;
+  if (!fn || !fullscreenElement()) return;
+  try {
+    var result = fn.call(document);
+    if (result && result['catch']) result['catch'](function () {});
+  } catch (e) {}
+}
+
+// If the TV's own Back button leaves full screen first, go back to the grid too.
+function onFullscreenChange() {
+  if (viewing && !fullscreenElement()) hide();
+}
+document.addEventListener('fullscreenchange', onFullscreenChange, false);
+document.addEventListener('webkitfullscreenchange', onFullscreenChange, false);
 
 $('viewer').onclick = hide;
 
