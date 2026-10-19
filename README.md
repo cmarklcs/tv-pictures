@@ -7,10 +7,17 @@ A simple picture picker for LG and Samsung TV web browsers.
 - Arrow keys to move, **OK** to show a picture full-screen
 - **Left/Right** flips through pictures, **Back** returns to the grid
 
-## Adding pictures
+## Adding pictures (staff)
 
-On github.com, open the `pictures` folder, choose **Add file → Upload files**, drop your
-images in, and commit. The site updates itself within a minute or two.
-JPG, PNG, GIF, WebP and BMP all work.
+Drop pictures into the shared **TV Pictures** folder in Google Drive, from a computer or phone.
+They appear on the TV by themselves within a minute or two. No need to reload the page.
 
-Everything here is public, so don't upload anything private.
+- Pictures are shown in alphabetical order. To choose the order, start file names with
+  numbers like `01 Welcome.jpg`, `02 Lunch menu.jpg`. The numbers aren't shown on the TV.
+- Any picture type works, including iPhone photos.
+- Everything in the folder can be seen by anyone with the TV link, so no private or student photos.
+
+## Setting it up
+
+See [SETUP.md](SETUP.md) to connect the TV page to the Drive folder (one time, about 5 minutes).
+Until that's done, the page shows the sample pictures in this repository's `pictures` folder.
