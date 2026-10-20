@@ -52,6 +52,9 @@
     -webkit-transition: opacity 0.8s; transition: opacity 0.8s; }
   #caption .where { float: right; color: #c9ced4; }
   #caption.faded { opacity: 0; }
+  #sharpening { position: absolute; right: 2vw; top: 2vw; padding: 0.6vw 1.2vw;
+    border-radius: 0.6vw; background: rgba(0,0,0,0.65); color: #ddd; font-size: 1.5vw;
+    display: none; }
 </style>
 </head>
 <body>
@@ -68,6 +71,7 @@
 <div id="viewer">
   <div id="big"></div>
   <div id="loading">Loading picture&hellip;</div>
+  <div id="sharpening">Loading full quality&hellip;</div>
   <div id="caption"><span class="where"></span><span class="what"></span></div>
 </div>
 
@@ -85,8 +89,11 @@ var viewing = false;
 var tiles = [];
 var captionTimer = null;
 var thumbs = {};        // picture key -> image address for the grid (null while loading)
-var fulls = {};         // picture key -> image address, the last few full-size ones
+var fulls = {};         // picture key -> sharp image address
 var fullOrder = [];
+var fullWaiting = {};   // picture key -> callbacks waiting for its sharp version
+var fullFailed = {};    // picture key -> true if the sharp version kept failing
+var MAX_FULLS = 20;     // how many sharp pictures to keep ready
 
 var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13,
   BACK: [8, 27, 461, 10009] }; // Backspace, Esc, LG Back, Samsung Back
@@ -98,11 +105,11 @@ function setText(el, text) { el.innerHTML = ''; el.appendChild(document.createTe
 
 var callbackCount = 0;
 // Ask the Google script for something; it answers by calling a function we name (JSONP).
-function askDrive(params, done) {
+function askDrive(params, done, timeoutMs) {
   var name = 'tvcb' + (++callbackCount);
   var script = document.createElement('script');
   var finished = false;
-  var timer = setTimeout(function () { finish(null); }, 45000);
+  var timer = setTimeout(function () { finish(null); }, timeoutMs || 45000);
   function finish(data) {
     if (finished) return;
     finished = true;
@@ -144,10 +151,10 @@ function loadList(done) {
 function picKey(pic) { return pic.id + ':' + pic.updated; }
 
 // Gets a picture at roughly the given width; calls done(address) or done(null).
-function loadImage(pic, size, done) {
+function loadImage(pic, size, done, timeoutMs) {
   if (pic.url) { done(pic.url); return; }
   askDrive('action=image&size=' + size + '&id=' + encodeURIComponent(pic.id),
-    function (data) { done(data ? data.data : null); });
+    function (data) { done(data ? data.data : null); }, timeoutMs);
 }
 
 /* ---------- Grid ---------- */
@@ -227,8 +234,9 @@ function loadThumbs() {
     if (thumbs[k] !== undefined) continue;
     thumbs[k] = null; // in progress
     thumbsBusy++;
-    loadImage(pic, 480, thumbArrived(k));
+    loadImage(pic, 640, thumbArrived(k));
   }
+  preloadFulls();
 }
 
 function thumbArrived(k) {
@@ -285,7 +293,44 @@ function rememberFull(k, src) {
   if (fulls[k]) return;
   fulls[k] = src;
   fullOrder.push(k);
-  while (fullOrder.length > 4) delete fulls[fullOrder.shift()];
+  while (fullOrder.length > MAX_FULLS) delete fulls[fullOrder.shift()];
+}
+
+// Gets a picture's sharp version, sharing one request between callers and retrying
+// a couple of times — Google can be slow, and big pictures take a while on a TV.
+function loadFull(pic, done) {
+  var k = picKey(pic);
+  if (pic.url) { done(pic.url); return; }
+  if (fulls[k]) { done(fulls[k]); return; }
+  if (fullWaiting[k]) { fullWaiting[k].push(done); return; }
+  fullWaiting[k] = [done];
+  var tries = 0;
+  function attempt() {
+    tries++;
+    loadImage(pic, fullSize(), function (src) {
+      if (!src && tries < 3) { setTimeout(attempt, 2000); return; }
+      if (src) { rememberFull(k, src); delete fullFailed[k]; } else fullFailed[k] = true;
+      var waiting = fullWaiting[k];
+      delete fullWaiting[k];
+      for (var i = 0; i < waiting.length; i++) waiting[i](src);
+    }, 90000);
+  }
+  attempt();
+}
+
+// Once the grid is filled in, fetch the sharp pictures one at a time in the background,
+// starting from the selected one, so OK shows them sharp straight away.
+var preloading = false;
+function preloadFulls() {
+  if (preloading || thumbsBusy > 0) return;
+  for (var n = 0; n < pics.length && n < MAX_FULLS; n++) {
+    var pic = pics[(current + n) % pics.length];
+    var k = picKey(pic);
+    if (pic.url || fulls[k] || fullWaiting[k] || fullFailed[k]) continue;
+    preloading = true;
+    loadFull(pic, function () { preloading = false; preloadFulls(); });
+    return;
+  }
 }
 
 function showCaption() {
@@ -311,37 +356,30 @@ function show(i) {
   if (!viewing) enterFullscreen();
   viewing = true;
 
-  if (fulls[k] || pic.url) { showImage(fulls[k] || pic.url); preloadNext(); return; }
-  // Show the small version straight away, then swap in the sharp one.
+  if (fulls[k] || pic.url) { showImage(fulls[k] || pic.url); return; }
+  // Not ready yet: show the small version with a note, then swap in the sharp one.
   $('big').style.backgroundImage = thumbs[k] ? 'url("' + thumbs[k] + '")' : 'none';
   setText($('loading'), 'Loading picture…');
   $('loading').style.display = thumbs[k] ? 'none' : 'block';
-  loadImage(pic, fullSize(), function (src) {
-    if (!src) {
-      if (pics[current] === pic && !thumbs[k]) setText($('loading'), 'Sorry, this picture wouldn’t load.');
-      return;
-    }
-    rememberFull(k, src);
-    if (viewing && pics[current] === pic) showImage(src);
-    preloadNext();
+  setText($('sharpening'), 'Loading full quality…');
+  $('sharpening').style.display = thumbs[k] ? 'block' : 'none';
+  loadFull(pic, function (src) {
+    if (!viewing || pics[current] !== pic) return;
+    if (src) { showImage(src); return; }
+    if (thumbs[k]) setText($('sharpening'), 'Full quality didn’t load. Press OK, then OK again to retry.');
+    else setText($('loading'), 'Sorry, this picture wouldn’t load.');
   });
 }
 
 function showImage(src) {
   $('loading').style.display = 'none';
+  $('sharpening').style.display = 'none';
   $('big').style.backgroundImage = 'url("' + src + '")';
-}
-
-function preloadNext() {
-  if (pics.length < 2) return;
-  var pic = pics[(current + 1) % pics.length];
-  var k = picKey(pic);
-  if (fulls[k] || pic.url) return;
-  loadImage(pic, fullSize(), function (src) { if (src) rememberFull(k, src); });
 }
 
 function hide() {
   $('viewer').style.display = 'none';
+  $('sharpening').style.display = 'none';
   viewing = false;
   exitFullscreen();
   focusTile(current);
