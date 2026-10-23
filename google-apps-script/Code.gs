@@ -30,14 +30,50 @@ function listPictures() {
   var pictures = [];
   while (files.hasNext()) {
     var f = files.next();
-    if (f.isTrashed() || f.getMimeType().indexOf('image/') !== 0) continue;
-    pictures.push({ id: f.getId(), name: f.getName(), updated: f.getLastUpdated().getTime() });
+    if (f.isTrashed()) continue;
+    var item = { id: f.getId(), name: f.getName(), updated: f.getLastUpdated().getTime() };
+    var type = f.getMimeType();
+    if (type.indexOf('image/') === 0) {
+      pictures.push(item);
+    } else if (type === MimeType.GOOGLE_DOCS || type === MimeType.PLAIN_TEXT) {
+      // A Google Doc (or text file) with a YouTube link in it shows as a video.
+      var video = youTubeId(f, item.updated);
+      if (video) {
+        item.youtube = video;
+        pictures.push(item);
+      }
+    }
   }
   pictures.sort(function (a, b) {
     var x = a.name.toLowerCase(), y = b.name.toLowerCase();
     return x < y ? -1 : x > y ? 1 : 0;
   });
   return { folder: folder.getName(), pictures: pictures };
+}
+
+/** Finds the first YouTube link in a Doc or text file; remembered until the file changes. */
+function youTubeId(file, updated) {
+  var cache = CacheService.getScriptCache();
+  var key = 'yt:' + file.getId() + ':' + updated;
+  var known = cache.get(key);
+  if (known !== null) return known;
+  var text = '';
+  try {
+    if (file.getMimeType() === MimeType.PLAIN_TEXT) {
+      text = file.getBlob().getDataAsString();
+    } else {
+      text = UrlFetchApp.fetch(
+        'https://www.googleapis.com/drive/v3/files/' + file.getId() + '/export?mimeType=text/plain',
+        { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }).getContentText();
+    }
+  } catch (err) {
+    return '';
+  }
+  var match = text.match(
+    /(?:youtube\.com\/(?:watch\?(?:[^\s#]*&)?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  var id = match ? match[1] : '';
+  cache.put(key, id, 21600);
+  return id;
 }
 
 /** Returns one picture as a data URL, resized by Google so phone photos (even HEIC) load fast. */
