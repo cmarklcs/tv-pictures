@@ -35,6 +35,11 @@ function listPictures() {
     var type = f.getMimeType();
     if (type.indexOf('image/') === 0) {
       pictures.push(item);
+    } else if (type.indexOf('video/') === 0) {
+      // TVs aren't signed in to Google, so a video has to be viewable by link to stream.
+      item.video = 'https://drive.google.com/uc?export=download&confirm=t&id=' + item.id;
+      if (!shareByLink(f, item.updated)) item.notShared = true;
+      pictures.push(item);
     } else if (type === MimeType.GOOGLE_DOCS || type === MimeType.PLAIN_TEXT) {
       // A Google Doc (or text file) with a YouTube link in it shows as a video.
       var video = youTubeId(f, item.updated);
@@ -49,6 +54,26 @@ function listPictures() {
     return x < y ? -1 : x > y ? 1 : 0;
   });
   return { folder: folder.getName(), pictures: pictures };
+}
+
+/** Makes a video in the TV folder viewable by anyone with its link; remembered until it changes. */
+function shareByLink(file, updated) {
+  var cache = CacheService.getScriptCache();
+  var key = 'shared:' + file.getId() + ':' + updated;
+  if (cache.get(key) === 'yes') return true;
+  var ok = false;
+  try {
+    var access = file.getSharingAccess();
+    ok = access === DriveApp.Access.ANYONE_WITH_LINK || access === DriveApp.Access.ANYONE;
+    if (!ok) {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      ok = true;
+    }
+  } catch (err) {
+    // Not allowed, e.g. the school blocks link sharing or the uploader locked the file.
+  }
+  if (ok) cache.put(key, 'yes', 21600);
+  return ok;
 }
 
 /** Finds the first YouTube link in a Doc or text file; remembered until the file changes. */
@@ -80,7 +105,8 @@ function youTubeId(file, updated) {
 function getImage(id, size) {
   var file = DriveApp.getFileById(id);
   // The web app is public, so only ever hand out pictures that are in the TV folder.
-  if (!isInFolder(file) || file.getMimeType().indexOf('image/') !== 0) {
+  var isVideo = file.getMimeType().indexOf('video/') === 0;
+  if (!isInFolder(file) || (file.getMimeType().indexOf('image/') !== 0 && !isVideo)) {
     throw new Error('That picture is not in the TV folder.');
   }
   size = Math.max(100, Math.min(size, 2560));
@@ -97,6 +123,7 @@ function getImage(id, size) {
   } catch (err) {
     // Fall back to the original file below.
   }
+  if (!blob && isVideo) throw new Error('Google is still making this video\'s preview picture.');
   if (!blob) blob = file.getBlob();
   return {
     id: id,

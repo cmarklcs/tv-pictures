@@ -57,6 +57,7 @@
   #caption.faded { opacity: 0; }
   #video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; }
   #video iframe { width: 100%; height: 100%; border: 0; display: block; }
+  #video video { width: 100%; height: 100%; display: block; background: transparent; }
   #sharpening { position: absolute; right: 2vw; top: 2vw; padding: 0.6vw 1.2vw;
     border-radius: 0.6vw; background: rgba(0,0,0,0.65); color: #ddd; font-size: 1.5vw;
     display: none; }
@@ -210,7 +211,7 @@ function build(keepId) {
     return;
   }
   var videoCount = 0;
-  for (var v = 0; v < pics.length; v++) if (pics[v].youtube) videoCount++;
+  for (var v = 0; v < pics.length; v++) if (pics[v].youtube || pics[v].video) videoCount++;
   var pictureCount = pics.length - videoCount;
   var counts = [];
   if (pictureCount) counts.push(pictureCount === 1 ? '1 picture' : pictureCount + ' pictures');
@@ -233,7 +234,7 @@ function build(keepId) {
     name.appendChild(document.createTextNode(friendlyName(pics[i].name)));
     tile.appendChild(thumb);
     tile.appendChild(name);
-    if (pics[i].youtube) {
+    if (pics[i].youtube || pics[i].video) {
       var badge = document.createElement('div');
       badge.className = 'badge';
       badge.appendChild(document.createTextNode('\u25B6 Video'));
@@ -351,7 +352,7 @@ function preloadFulls() {
   for (var n = 0; n < pics.length && n < MAX_FULLS; n++) {
     var pic = pics[(current + n) % pics.length];
     var k = picKey(pic);
-    if (pic.url || fulls[k] || fullWaiting[k] || fullFailed[k]) continue;
+    if (pic.url || pic.video || fulls[k] || fullWaiting[k] || fullFailed[k]) continue;
     preloading = true;
     loadFull(pic, function () { preloading = false; preloadFulls(); });
     return;
@@ -375,7 +376,7 @@ function show(i) {
   setText($('caption').lastChild, friendlyName(pic.name));
   var more = pics.length > 1 ? '\u00A0\u00A0\u00A0 \u25C0 \u25B6 more' : '';
   setText($('caption').firstChild, (current + 1) + ' of ' + pics.length +
-    (pic.youtube ? '\u00A0\u00A0\u00A0 OK pause/play' : '') + more + '\u00A0\u00A0\u00A0 BACK to return');
+    (pic.youtube || pic.video ? '\u00A0\u00A0\u00A0 OK pause/play' : '') + more + '\u00A0\u00A0\u00A0 BACK to return');
   showCaption();
 
   $('viewer').style.display = 'block';
@@ -384,6 +385,7 @@ function show(i) {
 
   stopVideo();
   if (pic.youtube) { playVideo(pic); return; }
+  if (pic.video) { playMp4(pic); return; }
   if (fulls[k] || pic.url) { showImage(fulls[k] || pic.url); return; }
   // Not ready yet: show the small version with a note, then swap in the sharp one.
   $('big').style.backgroundImage = thumbs[k] ? 'url("' + thumbs[k] + '")' : 'none';
@@ -416,7 +418,7 @@ function hide() {
 
 $('viewer').onclick = hide;
 
-/* ---------- YouTube videos ---------- */
+/* ---------- Videos: YouTube links and MP4 files ---------- */
 
 var videoPlaying = false;
 
@@ -442,8 +444,51 @@ function playVideo(pic) {
   $('video').style.display = 'block';
 }
 
+// An MP4 from the Drive folder, playing on a loop until Back is pressed.
+function playMp4(pic) {
+  var k = picKey(pic);
+  // Show the preview picture while the video starts.
+  $('big').style.backgroundImage = thumbs[k] ? 'url("' + thumbs[k] + '")' : 'none';
+  $('sharpening').style.display = 'none';
+  $('loading').style.display = 'block';
+  if (pic.notShared) {
+    setText($('loading'), 'This video can\u2019t play yet: it couldn\u2019t be shared by link. ' +
+      'Ask whoever looks after the TV folder.');
+    return;
+  }
+  setText($('loading'), 'Loading video\u2026');
+  var player = document.createElement('video');
+  player.setAttribute('playsinline', '');
+  player.setAttribute('loop', '');
+  player.setAttribute('autoplay', '');
+  player.setAttribute('preload', 'auto');
+  player.loop = true;
+  player.onplaying = function () {
+    $('loading').style.display = 'none';
+    $('big').style.backgroundImage = 'none';
+    videoPlaying = true;
+  };
+  player.onpause = function () { videoPlaying = false; };
+  player.onerror = function () {
+    if (player.parentNode !== $('video')) return; // already stopped
+    setText($('loading'), 'Sorry, this video wouldn\u2019t play. MP4 files work best.');
+    $('loading').style.display = 'block';
+  };
+  player.src = pic.video;
+  $('video').appendChild(player);
+  $('video').style.display = 'block';
+  videoCommand('playVideo');
+}
+
 function videoCommand(func) {
   var frame = $('video').firstChild;
+  if (frame && frame.tagName === 'VIDEO') {
+    try {
+      var result = func === 'pauseVideo' ? frame.pause() : frame.play();
+      if (result && result['catch']) result['catch'](function () {});
+    } catch (e) {}
+    return;
+  }
   if (!frame || !frame.contentWindow) return;
   try {
     frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: func, args: [] }), '*');
@@ -451,12 +496,19 @@ function videoCommand(func) {
 }
 
 function toggleVideo() {
+  var player = $('video').firstChild;
+  if (player && player.tagName === 'VIDEO') videoPlaying = !player.paused;
   videoCommand(videoPlaying ? 'pauseVideo' : 'playVideo');
   videoPlaying = !videoPlaying;
   showCaption();
 }
 
 function stopVideo() {
+  var player = $('video').firstChild;
+  if (player && player.tagName === 'VIDEO') {
+    // Stop the download too, not just the picture.
+    try { player.pause(); player.removeAttribute('src'); player.load(); } catch (e) {}
+  }
   $('video').innerHTML = ''; // removing the player stops it
   $('video').style.display = 'none';
   videoPlaying = false;
@@ -522,7 +574,7 @@ document.onkeydown = function (e) {
   var isBack = false;
   for (var b = 0; b < KEY.BACK.length; b++) if (k === KEY.BACK[b]) isBack = true;
 
-  var onVideo = viewing && pics[current] && pics[current].youtube;
+  var onVideo = viewing && pics[current] && (pics[current].youtube || pics[current].video);
 
   if (onVideo && k === KEY.ENTER) toggleVideo();
   else if (onVideo && k === KEY.PLAY) { videoCommand('playVideo'); videoPlaying = true; }
